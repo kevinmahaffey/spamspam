@@ -1,13 +1,86 @@
 """Read-only access to macOS Messages chat.db."""
 
 import re
+import shutil
 import sqlite3
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 CHAT_DB_PATH = Path.home() / "Library" / "Messages" / "chat.db"
+MIRROR_DIR = Path.home() / ".config" / "spamspam" / "db_mirror"
 APPLE_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and 2001-01-01
+
+
+def sync_db_via_applescript() -> Path:
+    """Copy chat.db to a readable location using osascript (Finder has FDA).
+
+    This avoids needing Full Disk Access on the terminal app itself.
+    Returns the path to the mirrored copy.
+    """
+    MIRROR_DIR.mkdir(parents=True, exist_ok=True)
+    dest = MIRROR_DIR / "chat.db"
+    src = CHAT_DB_PATH
+
+    # Use osascript to invoke Finder's file copy (Finder has FDA by default)
+    script = f'''
+    tell application "Finder"
+        set srcFile to POSIX file "{src}" as alias
+        set destFolder to POSIX file "{MIRROR_DIR}" as alias
+        try
+            delete (file "chat.db" of destFolder)
+        end try
+        duplicate srcFile to destFolder
+    end tell
+    '''
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=30,
+    )
+
+    if result.returncode != 0:
+        # Fallback: try shell cp (works if terminal has FDA)
+        try:
+            shutil.copy2(src, dest)
+        except PermissionError:
+            raise PermissionError(
+                f"Cannot copy {src} to {dest}.\n"
+                "Neither Finder copy nor direct copy worked.\n"
+                "Grant Full Disk Access to your terminal app, or copy chat.db manually:\n"
+                f"  cp ~/Library/Messages/chat.db {dest}"
+            )
+
+    if not dest.exists():
+        raise FileNotFoundError(f"Sync failed: {dest} not created")
+
+    # Also copy chat.db-wal and chat.db-shm if they exist (WAL mode)
+    for suffix in ("-wal", "-shm"):
+        wal_src = src.with_name(src.name + suffix)
+        if wal_src.exists():
+            wal_script = f'''
+            tell application "Finder"
+                set srcFile to POSIX file "{wal_src}" as alias
+                set destFolder to POSIX file "{MIRROR_DIR}" as alias
+                try
+                    delete (file "{src.name}{suffix}" of destFolder)
+                end try
+                duplicate srcFile to destFolder
+            end tell
+            '''
+            subprocess.run(
+                ["osascript", "-e", wal_script],
+                capture_output=True, text=True, timeout=15,
+            )
+            # Fallback to cp
+            wal_dest = dest.with_name(dest.name + suffix)
+            if not wal_dest.exists():
+                try:
+                    shutil.copy2(wal_src, wal_dest)
+                except (PermissionError, FileNotFoundError):
+                    pass
+
+    return dest
 
 
 @dataclass

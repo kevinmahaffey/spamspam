@@ -48,6 +48,9 @@ def main(argv: list[str] | None = None):
     run_p.add_argument("--oauth", action="store_true",
                        help="Use Claude Max/Pro OAuth instead of API key "
                             "(requires claude-agent-sdk)")
+    run_p.add_argument("--db-path", metavar="PATH",
+                       help="Path to a copy of chat.db (bypasses Full Disk Access). "
+                            "If omitted, auto-syncs via Finder if direct access fails.")
 
     # conversations
     sub.add_parser("conversations", help="List recent conversations from Messages")
@@ -178,7 +181,7 @@ def _cmd_run(args):
 
     from .bot import SpamBot
     bot = SpamBot(poll_interval=args.interval, dry_run=args.dry_run,
-                  use_oauth=args.oauth)
+                  use_oauth=args.oauth, db_path=args.db_path)
     bot.run()
 
 

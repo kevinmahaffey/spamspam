@@ -14,10 +14,38 @@ from .sender import send_message
 
 class SpamBot:
     def __init__(self, poll_interval: int = 30, dry_run: bool = False,
-                 use_oauth: bool = False):
+                 use_oauth: bool = False, db_path: str | None = None):
         self.poll_interval = poll_interval
         self.dry_run = dry_run
         self.ai = create_generator(use_oauth=use_oauth)
+        self._db_path = Path(db_path) if db_path else None
+        self._use_sync = db_path is None  # auto-sync if no explicit path
+
+    @property
+    def db_path(self) -> Path | None:
+        return self._db_path
+
+    def _sync_db(self):
+        """Sync chat.db to a readable location if needed."""
+        if not self._use_sync:
+            return
+        # First check if we can read the DB directly
+        if self._db_path is None:
+            try:
+                conn = __import__("sqlite3").connect(
+                    f"file:{db.CHAT_DB_PATH}?mode=ro", uri=True, timeout=2)
+                conn.close()
+                # Direct access works, no sync needed
+                return
+            except Exception:
+                pass
+
+            # Can't read directly, try syncing via Finder
+            try:
+                self._db_path = db.sync_db_via_applescript()
+                print(f"  [SYNC] Mirrored chat.db to {self._db_path}")
+            except Exception as e:
+                print(f"  [WARN] DB sync failed: {e}")
 
     def run(self):
         """Main polling loop."""
@@ -35,6 +63,9 @@ class SpamBot:
             print(f"  Monitoring self-conversation: {self_handle}")
             print(f"  Text yourself commands like: spam +15551234567\n")
 
+        # Initial DB sync
+        self._sync_db()
+
         try:
             while True:
                 self._poll_cycle()
@@ -44,6 +75,13 @@ class SpamBot:
 
     def _poll_cycle(self):
         """One poll cycle: check commands, then process conversations."""
+        # Re-sync DB mirror each cycle to pick up new messages
+        if self._use_sync and self._db_path:
+            try:
+                db.sync_db_via_applescript()
+            except Exception:
+                pass  # use stale copy, will retry next cycle
+
         state = config.load_state()
         self_handle = state.get("self_handle")
 
@@ -80,7 +118,8 @@ class SpamBot:
         last_rowid = state.get("last_command_rowid", 0)
 
         try:
-            messages = db.get_self_messages(self_handle, since_rowid=last_rowid)
+            messages = db.get_self_messages(self_handle, since_rowid=last_rowid,
+                                            db_path=self.db_path)
         except (FileNotFoundError, sqlite3.OperationalError) as e:
             print(f"[WARN] Could not read messages DB: {e}")
             return
@@ -93,7 +132,8 @@ class SpamBot:
             if cmd:
                 ts = msg.timestamp.strftime("%H:%M:%S")
                 print(f"[{ts}] Command received: {msg.text}")
-                result = commands.execute_command(cmd, self_handle, self.dry_run)
+                result = commands.execute_command(cmd, self_handle, self.dry_run,
+                                                  db_path=self.db_path)
                 print(f"  -> {result}")
 
         # Update cursor to latest message
@@ -105,7 +145,8 @@ class SpamBot:
         last_id = entry.get("last_reply_message_id", 0)
 
         try:
-            messages = db.get_recent_messages(number, since_rowid=last_id)
+            messages = db.get_recent_messages(number, since_rowid=last_id,
+                                              db_path=self.db_path)
         except (FileNotFoundError, sqlite3.OperationalError) as e:
             print(f"[WARN] Could not read messages for {number}: {e}")
             return

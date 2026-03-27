@@ -64,7 +64,8 @@ def _normalize_number(raw: str) -> str:
     return digits
 
 
-def execute_command(cmd: dict, self_handle: str, dry_run: bool = False) -> str:
+def execute_command(cmd: dict, self_handle: str, dry_run: bool = False,
+                    db_path=None) -> str:
     """Execute a parsed command and return a status message."""
     action = cmd["action"]
 
@@ -87,8 +88,8 @@ def execute_command(cmd: dict, self_handle: str, dry_run: bool = False) -> str:
 
         # Get latest message ID and service type
         try:
-            latest_rowid = db.get_latest_rowid_for_handle(number)
-            service = db.detect_service_for_handle(number)
+            latest_rowid = db.get_latest_rowid_for_handle(number, db_path=db_path)
+            service = db.detect_service_for_handle(number, db_path=db_path)
         except Exception:
             latest_rowid = 0
             service = "SMS"
