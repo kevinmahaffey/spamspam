@@ -15,6 +15,10 @@ def main(argv: list[str] | None = None):
     )
     sub = parser.add_subparsers(dest="command")
 
+    # install-helper
+    sub.add_parser("install-helper",
+                   help="Create the DB sync helper app (avoids Full Disk Access on terminal)")
+
     # setup
     setup_p = sub.add_parser("setup", help="Configure your phone number/email")
     setup_p.add_argument("handle", nargs="?",
@@ -61,7 +65,9 @@ def main(argv: list[str] | None = None):
         parser.print_help()
         return
 
-    if args.command == "setup":
+    if args.command == "install-helper":
+        _cmd_install_helper()
+    elif args.command == "setup":
         _cmd_setup(args)
     elif args.command == "flag":
         _cmd_flag(args)
@@ -79,6 +85,34 @@ def main(argv: list[str] | None = None):
         _cmd_conversations()
 
 
+def _cmd_install_helper():
+    app_path = db.create_sync_helper()
+    print(f"Created sync helper at:\n  {app_path}\n")
+
+    if db.can_read_db_directly():
+        print("Note: Your terminal already has Full Disk Access, so the helper")
+        print("isn't strictly needed. But it's there if you want to revoke FDA later.\n")
+        return
+
+    print("Now grant it Full Disk Access:")
+    print("  1. Open System Settings > Privacy & Security > Full Disk Access")
+    print(f"  2. Click '+' and add: {app_path}")
+    print("  3. (Or drag SpamSpamSync.app from Finder into the list)\n")
+    print(f"The helper lives at: {app_path}")
+    print("It does exactly one thing: copies chat.db to a readable location.")
+    print("You can inspect it yourself - it's just a 4-line bash script.\n")
+
+    # Try to open System Settings to the right pane (macOS only)
+    import subprocess
+    try:
+        subprocess.run(
+            ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"],
+            capture_output=True, timeout=5,
+        )
+    except FileNotFoundError:
+        pass  # not on macOS
+
+
 def _cmd_setup(args):
     handle = args.handle
     if not handle:
@@ -89,7 +123,12 @@ def _cmd_setup(args):
 
     config.set_self_handle(handle)
     print(f"Self handle set to: {handle}")
-    print("\nYou can now text yourself commands from your iPhone:")
+
+    if not db.can_read_db_directly() and not db.HELPER_APP.exists():
+        print("\nNext: install the DB sync helper (avoids granting FDA to your terminal):")
+        print("  python -m spamspam install-helper\n")
+
+    print("You can now text yourself commands from your iPhone:")
     print("  spam +15551234567          - flag a spammer")
     print("  spam +15551234567 alien    - flag with specific persona")
     print("  stop +15551234567          - stop engaging")

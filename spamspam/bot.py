@@ -6,6 +6,8 @@ import threading
 import time
 from datetime import datetime
 
+from pathlib import Path
+
 from . import config, db, commands, display
 from .ai import create_generator
 from .personas import PERSONAS
@@ -25,27 +27,21 @@ class SpamBot:
     def db_path(self) -> Path | None:
         return self._db_path
 
-    def _sync_db(self):
-        """Sync chat.db to a readable location if needed."""
+    def _ensure_db(self):
+        """Ensure we can read the messages DB, syncing if needed."""
         if not self._use_sync:
             return
-        # First check if we can read the DB directly
-        if self._db_path is None:
-            try:
-                conn = __import__("sqlite3").connect(
-                    f"file:{db.CHAT_DB_PATH}?mode=ro", uri=True, timeout=2)
-                conn.close()
-                # Direct access works, no sync needed
-                return
-            except Exception:
-                pass
-
-            # Can't read directly, try syncing via Finder
-            try:
-                self._db_path = db.sync_db_via_applescript()
-                print(f"  [SYNC] Mirrored chat.db to {self._db_path}")
-            except Exception as e:
-                print(f"  [WARN] DB sync failed: {e}")
+        if self._db_path is None and db.can_read_db_directly():
+            return  # direct access works
+        try:
+            self._db_path = db.sync_db()
+        except FileNotFoundError:
+            print("[ERROR] Sync helper not installed.")
+            print("Run: python -m spamspam install-helper")
+            raise SystemExit(1)
+        except RuntimeError as e:
+            print(f"[ERROR] {e}")
+            raise SystemExit(1)
 
     def run(self):
         """Main polling loop."""
@@ -63,8 +59,8 @@ class SpamBot:
             print(f"  Monitoring self-conversation: {self_handle}")
             print(f"  Text yourself commands like: spam +15551234567\n")
 
-        # Initial DB sync
-        self._sync_db()
+        # Ensure we can read the DB
+        self._ensure_db()
 
         try:
             while True:
@@ -78,7 +74,7 @@ class SpamBot:
         # Re-sync DB mirror each cycle to pick up new messages
         if self._use_sync and self._db_path:
             try:
-                db.sync_db_via_applescript()
+                db.sync_db()
             except Exception:
                 pass  # use stale copy, will retry next cycle
 

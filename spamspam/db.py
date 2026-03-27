@@ -1,8 +1,10 @@
 """Read-only access to macOS Messages chat.db."""
 
+import os
+import plistlib
 import re
-import shutil
 import sqlite3
+import stat
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -10,76 +12,79 @@ from pathlib import Path
 
 CHAT_DB_PATH = Path.home() / "Library" / "Messages" / "chat.db"
 MIRROR_DIR = Path.home() / ".config" / "spamspam" / "db_mirror"
+HELPER_APP = Path.home() / ".config" / "spamspam" / "SpamSpamSync.app"
 APPLE_EPOCH_OFFSET = 978307200  # seconds between Unix epoch and 2001-01-01
 
 
-def sync_db_via_applescript() -> Path:
-    """Copy chat.db to a readable location using osascript (Finder has FDA).
+def can_read_db_directly() -> bool:
+    """Check if we can read chat.db without the helper."""
+    try:
+        conn = sqlite3.connect(
+            f"file:{CHAT_DB_PATH}?mode=ro", uri=True, timeout=2)
+        conn.execute("SELECT 1 FROM message LIMIT 1")
+        conn.close()
+        return True
+    except Exception:
+        return False
 
-    This avoids needing Full Disk Access on the terminal app itself.
-    Returns the path to the mirrored copy.
+
+def create_sync_helper() -> Path:
+    """Create a minimal .app bundle that copies chat.db.
+
+    The user grants Full Disk Access to this tiny app (not their terminal).
+    It's a background-only app (no Dock icon) that copies the DB and exits.
     """
+    app = HELPER_APP
+    macos_dir = app / "Contents" / "MacOS"
+    macos_dir.mkdir(parents=True, exist_ok=True)
     MIRROR_DIR.mkdir(parents=True, exist_ok=True)
-    dest = MIRROR_DIR / "chat.db"
-    src = CHAT_DB_PATH
 
-    # Use osascript to invoke Finder's file copy (Finder has FDA by default)
-    script = f'''
-    tell application "Finder"
-        set srcFile to POSIX file "{src}" as alias
-        set destFolder to POSIX file "{MIRROR_DIR}" as alias
-        try
-            delete (file "chat.db" of destFolder)
-        end try
-        duplicate srcFile to destFolder
-    end tell
-    '''
+    # Info.plist - marks as background-only (no Dock icon)
+    info_plist = {
+        "CFBundleIdentifier": "com.spamspam.sync",
+        "CFBundleName": "SpamSpamSync",
+        "CFBundleExecutable": "sync",
+        "CFBundleVersion": "1.0",
+        "LSUIElement": True,  # no Dock icon
+    }
+    with open(app / "Contents" / "Info.plist", "wb") as f:
+        plistlib.dump(info_plist, f)
+
+    # The actual sync script
+    script = app / "Contents" / "MacOS" / "sync"
+    src = CHAT_DB_PATH
+    dst = MIRROR_DIR
+    script.write_text(f"""#!/bin/bash
+cp "{src}" "{dst}/" 2>/dev/null
+cp "{src}-wal" "{dst}/" 2>/dev/null
+cp "{src}-shm" "{dst}/" 2>/dev/null
+exit 0
+""")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    return app
+
+
+def sync_db() -> Path:
+    """Sync chat.db using the helper app. Returns path to the mirror."""
+    if not HELPER_APP.exists():
+        raise FileNotFoundError(
+            "Sync helper not installed. Run: python -m spamspam install-helper"
+        )
+
     result = subprocess.run(
-        ["osascript", "-e", script],
+        ["open", "-jgW", str(HELPER_APP)],
         capture_output=True, text=True, timeout=30,
     )
 
-    if result.returncode != 0:
-        # Fallback: try shell cp (works if terminal has FDA)
-        try:
-            shutil.copy2(src, dest)
-        except PermissionError:
-            raise PermissionError(
-                f"Cannot copy {src} to {dest}.\n"
-                "Neither Finder copy nor direct copy worked.\n"
-                "Grant Full Disk Access to your terminal app, or copy chat.db manually:\n"
-                f"  cp ~/Library/Messages/chat.db {dest}"
-            )
-
+    dest = MIRROR_DIR / "chat.db"
     if not dest.exists():
-        raise FileNotFoundError(f"Sync failed: {dest} not created")
-
-    # Also copy chat.db-wal and chat.db-shm if they exist (WAL mode)
-    for suffix in ("-wal", "-shm"):
-        wal_src = src.with_name(src.name + suffix)
-        if wal_src.exists():
-            wal_script = f'''
-            tell application "Finder"
-                set srcFile to POSIX file "{wal_src}" as alias
-                set destFolder to POSIX file "{MIRROR_DIR}" as alias
-                try
-                    delete (file "{src.name}{suffix}" of destFolder)
-                end try
-                duplicate srcFile to destFolder
-            end tell
-            '''
-            subprocess.run(
-                ["osascript", "-e", wal_script],
-                capture_output=True, text=True, timeout=15,
-            )
-            # Fallback to cp
-            wal_dest = dest.with_name(dest.name + suffix)
-            if not wal_dest.exists():
-                try:
-                    shutil.copy2(wal_src, wal_dest)
-                except (PermissionError, FileNotFoundError):
-                    pass
-
+        raise RuntimeError(
+            "Sync helper ran but chat.db was not copied.\n"
+            "The helper app likely needs Full Disk Access.\n"
+            "Go to: System Settings > Privacy & Security > Full Disk Access\n"
+            f"Add: {HELPER_APP}"
+        )
     return dest
 
 
