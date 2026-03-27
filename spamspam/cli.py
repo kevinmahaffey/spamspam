@@ -45,6 +45,9 @@ def main(argv: list[str] | None = None):
                        help="Poll interval in seconds (default: 30)")
     run_p.add_argument("--dry-run", "-n", action="store_true",
                        help="Don't actually send messages")
+    run_p.add_argument("--oauth", action="store_true",
+                       help="Use Claude Max/Pro OAuth instead of API key "
+                            "(requires claude-agent-sdk)")
 
     # conversations
     sub.add_parser("conversations", help="List recent conversations from Messages")
@@ -174,7 +177,8 @@ def _cmd_run(args):
         return
 
     from .bot import SpamBot
-    bot = SpamBot(poll_interval=args.interval, dry_run=args.dry_run)
+    bot = SpamBot(poll_interval=args.interval, dry_run=args.dry_run,
+                  use_oauth=args.oauth)
     bot.run()
 
 

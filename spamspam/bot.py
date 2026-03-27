@@ -7,16 +7,17 @@ import time
 from datetime import datetime
 
 from . import config, db, commands, display
-from .ai import ResponseGenerator
+from .ai import create_generator
 from .personas import PERSONAS
 from .sender import send_message
 
 
 class SpamBot:
-    def __init__(self, poll_interval: int = 30, dry_run: bool = False):
+    def __init__(self, poll_interval: int = 30, dry_run: bool = False,
+                 use_oauth: bool = False):
         self.poll_interval = poll_interval
         self.dry_run = dry_run
-        self.ai = ResponseGenerator()
+        self.ai = create_generator(use_oauth=use_oauth)
 
     def run(self):
         """Main polling loop."""

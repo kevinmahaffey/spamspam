@@ -4,17 +4,24 @@ AI-powered spam engagement bot for iMessage/SMS on macOS. Automatically responds
 
 ## Quick Start
 
-```bash
-# Install the only dependency
-pip install anthropic
+### Option A: Claude Max/Pro (OAuth, no API key needed)
 
-# Set your API key
+```bash
+pip install claude-agent-sdk
+
+# Make sure you're logged into Claude Code (run 'claude' once to authenticate)
+
+python -m spamspam setup +15559990000
+python -m spamspam run --oauth
+```
+
+### Option B: API Key
+
+```bash
+pip install anthropic
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Configure your phone number (needed for self-text commands)
 python -m spamspam setup +15559990000
-
-# Start the bot
 python -m spamspam run
 ```
 
